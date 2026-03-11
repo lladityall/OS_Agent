@@ -16,7 +16,7 @@ from typing import Optional, Callable
 
 from ollama import Client
 
-OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "sk_4e2f36c12e409003ccf8da7c678de36ca802ed81d0cd26f3")
+OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "e367096933634fe4a2c7c722e00a1330.eordImDQUFo0YlUAo-jD-AE0")
 MODEL = os.environ.get("OLLAMA_MODEL", "gpt-oss:120b")
 
 # ── Destructive keyword detection ─────────────────────────────────────────────
