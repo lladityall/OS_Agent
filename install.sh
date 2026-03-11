@@ -1,7 +1,8 @@
 #!/bin/bash
 # ============================================================
-# RAM OS Agent - Install & Setup Script
-# Run: chmod +x install.sh && ./install.sh
+# RAM OS Agent - Fix Installer (venv-aware)
+# Run from inside your RAM2 folder:
+#   bash fix_install.sh
 # ============================================================
 
 set -e
@@ -16,135 +17,139 @@ BOLD='\033[1m'
 RAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$HOME/.ram"
 
-echo -e "${GREEN}${BOLD}"
-echo "██████╗  █████╗ ███╗   ███╗"
-echo "██╔══██╗██╔══██╗████╗ ████║"
-echo "██████╔╝███████║██╔████╔██║"
-echo "██╔══██╗██╔══██║██║╚██╔╝██║"
-echo "██║  ██║██║  ██║██║ ╚═╝ ██║"
-echo "╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝"
-echo -e "${CYAN}  Ubuntu OS Agent - Installer${RESET}"
-echo ""
+echo -e "${CYAN}RAM_DIR detected: ${GREEN}$RAM_DIR${RESET}"
 
-echo -e "${CYAN}[1/5] Checking Python 3...${RESET}"
-if ! command -v python3 &>/dev/null; then
-    echo -e "${RED}Python 3 not found! Install with: sudo apt install python3${RESET}"
-    exit 1
-fi
-python3 --version
-
-echo -e "${CYAN}[2/5] Installing Python dependencies...${RESET}"
-pip3 install psutil ollama --break-system-packages 2>/dev/null || \
-pip3 install psutil ollama 2>/dev/null || \
-python3 -m pip install psutil ollama --user
-
-echo -e "${CYAN}[3/5] Creating config directory...${RESET}"
-mkdir -p "$CONFIG_DIR/kb"
-if [ ! -f "$CONFIG_DIR/config.json" ]; then
-    cat > "$CONFIG_DIR/config.json" << 'EOF'
-{
-  "ollama_api_key": "sk_4e2f36c12e409003ccf8da7c678de36ca802ed81d0cd26f3",
-  "ollama_host": "https://api.ollama.ai",
-  "ollama_model": "llama3.2",
-  "telegram_bot_token": "",
-  "telegram_chat_id": "",
-  "timezone": "Asia/Kolkata"
-}
-EOF
-    echo -e "  ${GREEN}✓ Config created at $CONFIG_DIR/config.json${RESET}"
+# ── Detect Python to use ──────────────────────────────────────────────────────
+# Priority: venv in RAM dir > activated venv > system python3
+if [ -f "$RAM_DIR/venv/bin/python3" ]; then
+    PYTHON="$RAM_DIR/venv/bin/python3"
+    echo -e "${CYAN}Using venv Python: ${GREEN}$PYTHON${RESET}"
+elif [ -n "$VIRTUAL_ENV" ] && [ -f "$VIRTUAL_ENV/bin/python3" ]; then
+    PYTHON="$VIRTUAL_ENV/bin/python3"
+    echo -e "${CYAN}Using active venv Python: ${GREEN}$PYTHON${RESET}"
 else
-    echo -e "  ${YELLOW}Config already exists, skipping.${RESET}"
+    PYTHON="$(which python3)"
+    echo -e "${CYAN}Using system Python: ${GREEN}$PYTHON${RESET}"
 fi
 
-echo -e "${CYAN}[4/5] Making RAM executable...${RESET}"
-chmod +x "$RAM_DIR/main.py"
+# ── Install dependencies into detected Python ─────────────────────────────────
+echo -e "\n${CYAN}Installing dependencies into correct Python...${RESET}"
+"$PYTHON" -m pip install psutil ollama --quiet
+echo -e "${GREEN}✓ psutil + ollama installed${RESET}"
+
+# ── Create launcher script ────────────────────────────────────────────────────
 mkdir -p "$HOME/.local/bin"
+LAUNCHER="$HOME/.local/bin/ram"
 
-# Create a system-wide launcher
-cat > "$HOME/.local/bin/ram" << LAUNCHEREOF
+cat > "$LAUNCHER" << LAUNCHEREOF
 #!/bin/bash
+export OLLAMA_API_KEY="e367096933634fe4a2c7c722e00a1330.eordImDQUFo0YlUAo-jD-AE0"
+export OLLAMA_HOST="https://ollama.com"
+export DISPLAY="\${DISPLAY:-:0}"
 cd "$RAM_DIR"
-export OLLAMA_API_KEY="sk_4e2f36c12e409003ccf8da7c678de36ca802ed81d0cd26f3"
-export OLLAMA_HOST="https://api.ollama.ai"
-python3 "$RAM_DIR/main.py" "\$@"
+exec "$PYTHON" "$RAM_DIR/main.py" "\$@"
 LAUNCHEREOF
-chmod +x "$HOME/.local/bin/ram"
 
-# Ensure ~/.local/bin is in PATH
-if ! grep -q ".local/bin" "$HOME/.bashrc" 2>/dev/null; then
+chmod +x "$LAUNCHER"
+echo -e "${GREEN}✓ Launcher created: $LAUNCHER${RESET}"
+echo -e "  Python: ${CYAN}$PYTHON${RESET}"
+
+# Add ~/.local/bin to PATH if missing
+if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-    echo -e "  ${GREEN}✓ Added ~/.local/bin to PATH in .bashrc${RESET}"
+    echo -e "${GREEN}✓ Added ~/.local/bin to PATH in .bashrc${RESET}"
 fi
-echo -e "  ${GREEN}✓ Launcher created at ~/.local/bin/ram${RESET}"
 
-echo -e "${CYAN}[5/5] Setting up keyboard shortcut (Super + A)...${RESET}"
+# ── Keyboard shortcut (Super+A) ───────────────────────────────────────────────
+echo -e "\n${CYAN}Setting up Super+A keyboard shortcut...${RESET}"
 
-# Detect desktop environment
-if command -v gsettings &>/dev/null; then
-    # GNOME / Ubuntu default
-    SHORTCUT_NAME="RAM OS Agent"
-    SHORTCUT_CMD="bash -c 'cd $RAM_DIR && OLLAMA_API_KEY=sk_4e2f36c12e409003ccf8da7c678de36ca802ed81d0cd26f3 OLLAMA_HOST=https://api.ollama.ai python3 $RAM_DIR/main.py'"
-    
-    # Create a .desktop launcher for terminal
-    cat > "$HOME/.local/share/applications/ram-agent.desktop" << EOF
+if ! command -v gsettings &>/dev/null; then
+    echo -e "${YELLOW}gsettings not found — set shortcut manually in Settings > Keyboard${RESET}"
+else
+    BINDING_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ram-agent/"
+
+    # Find best non-snap terminal
+    TERMINAL=""
+    for t in xterm lxterminal xfce4-terminal mate-terminal tilix alacritty kitty gnome-terminal; do
+        if command -v "$t" &>/dev/null; then
+            TERMINAL="$t"
+            break
+        fi
+    done
+
+    if [ -z "$TERMINAL" ]; then
+        echo -e "${RED}No terminal found! Install one: sudo apt install xterm${RESET}"
+        TERMINAL="xterm"
+    fi
+    echo -e "  Using terminal: ${GREEN}$TERMINAL${RESET}"
+
+    # Build launch command based on terminal
+    if [ "$TERMINAL" = "xterm" ]; then
+        TERM_CMD="xterm -fa 'Monospace' -fs 12 -bg black -fg green -e bash -c 'export OLLAMA_API_KEY=e367096933634fe4a2c7c722e00a1330.eordImDQUFo0YlUAo-jD-AE0; export OLLAMA_HOST=https://ollama.com; cd $RAM_DIR && $PYTHON $RAM_DIR/main.py; bash'"
+    elif [ "$TERMINAL" = "gnome-terminal" ]; then
+        TERM_CMD="gnome-terminal -- bash -c 'export OLLAMA_API_KEY=e367096933634fe4a2c7c722e00a1330.eordImDQUFo0YlUAo-jD-AE0; export OLLAMA_HOST=https://ollama.com; cd $RAM_DIR && $PYTHON $RAM_DIR/main.py; bash'"
+    else
+        TERM_CMD="$TERMINAL -- bash -c 'export OLLAMA_API_KEY=e367096933634fe4a2c7c722e00a1330.eordImDQUFo0YlUAo-jD-AE0; export OLLAMA_HOST=https://ollama.com; cd $RAM_DIR && $PYTHON $RAM_DIR/main.py; bash'"
+    fi
+
+    # Register binding
+    RAW=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null || echo "[]")
+    RAW=$(echo "$RAW" | sed "s/@as //g" | tr -d "\n")
+
+    if echo "$RAW" | grep -q "ram-agent"; then
+        # Already registered — just update command and binding
+        echo -e "  ${YELLOW}Binding already exists — updating command...${RESET}"
+    else
+        if [ "$RAW" = "[]" ] || [ -z "$RAW" ]; then
+            NEW_BINDINGS="['$BINDING_PATH']"
+        else
+            NEW_BINDINGS=$(echo "$RAW" | sed "s|]|, '$BINDING_PATH']|")
+        fi
+        gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$NEW_BINDINGS"
+    fi
+
+    gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$BINDING_PATH" name "RAM OS Agent"
+    gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$BINDING_PATH" command "$TERM_CMD"
+    gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$BINDING_PATH" binding "<Super>a"
+
+    echo -e "${GREEN}✓ Super+A shortcut set!${RESET}"
+    echo -e "  Command: ${CYAN}$TERM_CMD${RESET}"
+
+    # Verify
+    echo -e "\n${CYAN}Verification:${RESET}"
+    echo -e "  Binding : $(gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$BINDING_PATH" binding)"
+    echo -e "  Name    : $(gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$BINDING_PATH" name)"
+fi
+
+# ── .desktop file ─────────────────────────────────────────────────────────────
+mkdir -p "$HOME/.local/share/applications"
+cat > "$HOME/.local/share/applications/ram-agent.desktop" << DESKTOPEOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=RAM OS Agent
-Comment=Ubuntu OS Agent
-Exec=bash -c 'cd $RAM_DIR && OLLAMA_API_KEY=sk_4e2f36c12e409003ccf8da7c678de36ca802ed81d0cd26f3 OLLAMA_HOST=https://api.ollama.ai python3 $RAM_DIR/main.py; bash'
+Comment=Ubuntu AI OS Agent
+Exec=$LAUNCHER
 Icon=utilities-terminal
 Terminal=true
-Categories=Utility;
-Keywords=ram;agent;ai;
-EOF
-    chmod +x "$HOME/.local/share/applications/ram-agent.desktop"
+Categories=Utility;System;
+Keywords=ram;agent;ai;assistant;
+DESKTOPEOF
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+echo -e "${GREEN}✓ .desktop entry created${RESET}"
 
-    # Set Super+A shortcut
-    BINDING_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ram-agent/"
-    RAM_LAUNCH_CMD="gnome-terminal -- bash -c 'cd $RAM_DIR && OLLAMA_API_KEY=sk_4e2f36c12e409003ccf8da7c678de36ca802ed81d0cd26f3 OLLAMA_HOST=https://api.ollama.ai python3 $RAM_DIR/main.py; exec bash'"
-
-    # Check if already set
-    if gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null | grep -q "ram-agent"; then
-        echo -e "  ${YELLOW}Shortcut already configured.${RESET}"
-    else
-        # Build new bindings list using pure bash (no JSON parsing needed)
-        RAW=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null || echo "")
-        # Strip @as prefix if present, normalize to a clean list
-        RAW=$(echo "$RAW" | sed "s/@as //g" | tr -d "\n")
-
-        if [ -z "$RAW" ] || [ "$RAW" = "[]" ]; then
-            NEW_BINDINGS="['$BINDING_PATH']"
-        else
-            # Insert before the closing ] — works even with existing entries
-            NEW_BINDINGS=$(echo "$RAW" | sed "s|]|, '$BINDING_PATH']|")
-        fi
-
-        gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$NEW_BINDINGS" 2>/dev/null \
-        && gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$BINDING_PATH" name "RAM OS Agent" 2>/dev/null \
-        && gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$BINDING_PATH" command "$RAM_LAUNCH_CMD" 2>/dev/null \
-        && gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$BINDING_PATH" binding "<Super>a" 2>/dev/null \
-        && echo -e "  ${GREEN}✓ Keyboard shortcut set: Super + A${RESET}" \
-        || echo -e "  ${YELLOW}⚠ Could not set shortcut automatically. See manual setup below.${RESET}"
-    fi
-else
-    echo -e "  ${YELLOW}Non-GNOME desktop detected. Set shortcut manually.${RESET}"
-fi
-
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}${BOLD}═══════════════════════════════════════════${RESET}"
-echo -e "${GREEN}${BOLD}  RAM OS Agent Installed Successfully!${RESET}"
-echo -e "${GREEN}${BOLD}═══════════════════════════════════════════${RESET}"
+echo -e "${GREEN}${BOLD}════════════════════════════════════════════════${RESET}"
+echo -e "${GREEN}${BOLD}  RAM Fixed & Ready!${RESET}"
+echo -e "${GREEN}${BOLD}════════════════════════════════════════════════${RESET}"
 echo ""
-echo -e "${CYAN}How to launch RAM:${RESET}"
-echo -e "  • ${GREEN}Super + A${RESET} (keyboard shortcut)"
-echo -e "  • Type ${GREEN}ram${RESET} in terminal"
-echo -e "  • Run: ${GREEN}python3 $RAM_DIR/main.py${RESET}"
+echo -e "  ${CYAN}Test now (open new terminal):${RESET}"
+echo -e "    ${GREEN}source ~/.bashrc && ram${RESET}"
 echo ""
-echo -e "${CYAN}Optional setup:${RESET}"
-echo -e "  • Gmail/Calendar: ${YELLOW}python3 $RAM_DIR/tools/email_tool.py --setup${RESET}"
-echo -e "  • Telegram:       ${YELLOW}python3 $RAM_DIR/tools/telegram_tool.py --setup TOKEN CHAT_ID${RESET}"
-echo -e "  • Browser tools:  ${YELLOW}pip3 install playwright && python3 -m playwright install chromium${RESET}"
+echo -e "  ${CYAN}Or press:${RESET} ${GREEN}Super + A${RESET}"
 echo ""
-echo -e "${CYAN}Config file: ${YELLOW}$CONFIG_DIR/config.json${RESET}"
+echo -e "  ${YELLOW}If Super+A still doesn't work:${RESET}"
+echo -e "  Settings → Keyboard → Custom Shortcuts → find 'RAM OS Agent'"
+echo -e "  If it shows 'disabled', click it and press Super+A manually."
 echo ""
