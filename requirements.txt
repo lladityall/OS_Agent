@@ -1,0 +1,13 @@
+psutil>=5.9.0
+ollama>=0.3.0
+
+# Optional: Gmail / Google Calendar
+# google-auth-oauthlib
+# google-auth-httplib2
+# google-api-python-client
+
+# Optional: Web browsing automation
+# playwright
+
+# Optional: Telegram
+# (uses built-in urllib, no extra dep needed)
